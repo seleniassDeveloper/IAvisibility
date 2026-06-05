@@ -61,7 +61,7 @@ export default function AuditWizard() {
   const [mounted, setMounted] = useState(false);
 
   // Language State: "es" | "en"
-  const [lang, setLang] = useState<"es" | "en">("en");
+  const [lang, setLang] = useState<"es" | "en">("es");
 
   // Navigation Sidebar State: "new-audit" | "projects" | "history" | "settings" | "help"
   const [activeTab, setActiveTab] = useState<"new-audit" | "projects" | "history" | "settings" | "help">("new-audit");
@@ -130,7 +130,7 @@ export default function AuditWizard() {
   const [perplexityKey, setPerplexityKey] = useState("");
   const [openaiKey, setOpenaiKey] = useState("");
   const [geminiKey, setGeminiKey] = useState("");
-  const [generationEngine, setGenerationEngine] = useState<string>("gemini");
+  const [generationEngine, setGenerationEngine] = useState<string>("mock");
 
   // Step 2 AI Preview Modal states
   const [previewQuestion, setPreviewQuestion] = useState<any | null>(null);
@@ -144,14 +144,21 @@ export default function AuditWizard() {
 
   const t = translations[lang];
 
+  const handleToggleLang = () => {
+    const nextLang = lang === "es" ? "en" : "es";
+    setLang(nextLang);
+    localStorage.setItem("preferred_lang", nextLang);
+  };
+
   // Load API keys and restore active project on mount
   useEffect(() => {
     if (typeof window !== "undefined") {
       setPerplexityKey(localStorage.getItem("pplx_key_override") || "");
       setOpenaiKey(localStorage.getItem("openai_key_override") || "");
       setGeminiKey(localStorage.getItem("gemini_key_override") || "");
-      localStorage.removeItem("preferred_lang");
-      setLang("en");
+      const storedLang = (localStorage.getItem("preferred_lang") as "es" | "en") || "es";
+      localStorage.setItem("preferred_lang", storedLang);
+      setLang(storedLang);
       loadProjects();
       loadHistory();
       
@@ -1201,13 +1208,19 @@ export default function AuditWizard() {
     const domain = projectForm.domain || "tudominio.com";
     const industry = projectForm.industry || "B2B";
     
-    // If this engine was the one used in the run, return the real result!
+    // Compute actual per-engine SOV from stored audit responses
+    const engResponses = originalResponses.filter((r: any) => r.provider === engine);
+    const engTotal = engResponses.length;
+    const engPresent = engResponses.filter((r: any) => (r.citations || []).some((c: any) => c.classification === "target")).length;
+    const perEngineSov = engTotal > 0 ? Math.round((engPresent / engTotal) * 100) : 0;
+
+    // If this engine was used in the run, return the real result
     if (reportData?.metrics?.questionsDetail) {
       const matchingQ = reportData.metrics.questionsDetail.find((q: any) => q.questionText === questionText && q.provider === engine);
       if (matchingQ && matchingQ.answer) {
         return {
           answer: matchingQ.answer,
-          sov: reportData.metrics.shareOfVoice,
+          sov: perEngineSov,
           citations: matchingQ.citations?.map((c: any) => c.domain) || [],
           advice: lang === "es" 
             ? "Métricas y citas reales extraídas de la ejecución en vivo." 
@@ -1292,18 +1305,64 @@ export default function AuditWizard() {
   const uniqueProviders = Array.from(new Set(originalResponses.map((r: any) => r.provider).filter(Boolean))) as string[];
 
   // Dynamically calculate metrics for rendering Step 5 panels
+  const parsedCompetitors = projectForm.competitors ? projectForm.competitors.split(",").map((c: any) => c.trim()).filter((c: any) => c.length > 0) : [];
+
   const activeReportData = !reportData
     ? null
-    : {
-        ...reportData,
-        metrics: selectedEngine === "all"
-          ? reportData.metrics
-          : calculateDashboardMetrics(
+    : (() => {
+        if (selectedEngine !== "all") {
+          return {
+            ...reportData,
+            metrics: calculateDashboardMetrics(
               { run: reportData.run, responses: originalResponses.filter((r: any) => r.provider === selectedEngine) },
               projectForm.domain,
-              projectForm.competitors ? projectForm.competitors.split(",").map((c: any) => c.trim()).filter((c: any) => c.length > 0) : []
+              parsedCompetitors
             )
-      };
+          };
+        }
+
+        // ALL view: dedupe citations by question for the per-query table
+        const dedupedResponses = Object.values(originalResponses.reduce((acc: any, resp: any) => {
+          if (!acc[resp.question_id]) {
+            acc[resp.question_id] = { ...resp, citations: [...resp.citations] };
+          } else {
+            const existingDomains = new Set(acc[resp.question_id].citations.map((c: any) => c.domain));
+            resp.citations.forEach((c: any) => {
+              if (!existingDomains.has(c.domain)) {
+                acc[resp.question_id].citations.push(c);
+                existingDomains.add(c.domain);
+              }
+            });
+          }
+          return acc;
+        }, {})) as any[];
+
+        const allMetrics = calculateDashboardMetrics(
+          { run: reportData.run, responses: dedupedResponses },
+          projectForm.domain,
+          parsedCompetitors
+        );
+
+        // Accurate cross-engine SOV = average of each engine's individual SOV
+        const enginesList = Array.from(new Set(originalResponses.map((r: any) => r.provider).filter(Boolean)));
+        const perEngineSov = enginesList.map((eng) => {
+          const engResponses = originalResponses.filter((r: any) => r.provider === eng);
+          const total = engResponses.length;
+          if (total === 0) return 0;
+          const present = engResponses.filter((r: any) => (r.citations || []).some((c: any) => c.classification === "target")).length;
+          return (present / total) * 100;
+        });
+        const avgSov = perEngineSov.length > 0 ? Math.round(perEngineSov.reduce((a, b) => a + b, 0) / perEngineSov.length) : 0;
+
+        allMetrics.shareOfVoice = avgSov;
+        allMetrics.newKpis = {
+          ...allMetrics.newKpis,
+          visibilityScore: avgSov,
+          opportunityScore: Math.max(0, 100 - avgSov),
+        };
+
+        return { ...reportData, metrics: allMetrics };
+      })();
 
   if (!mounted) {
     return (
@@ -1403,7 +1462,14 @@ export default function AuditWizard() {
             <span>{t.tabHelp}</span>
           </button>
           
-          {/* Language Selector Toggle Removed */}
+          {/* Language Selector Toggle */}
+          <button
+            onClick={handleToggleLang}
+            className="w-full flex items-center justify-center gap-1.5 text-[10px] font-mono font-bold tracking-widest text-violet-400 hover:text-white bg-violet-500/10 hover:bg-violet-500/25 px-2.5 py-1.5 rounded-lg border border-violet-500/25 transition-all cursor-pointer shrink-0"
+            title="Switch Language / Cambiar Idioma"
+          >
+            <span>{lang === "es" ? "ENGLISH (EN)" : "ESPAÑOL (ES)"}</span>
+          </button>
 
           <div className="bg-black/30 border border-white/5 p-3 rounded-lg text-[10px] font-mono space-y-1 text-gray-500">
             <span className="block text-gray-400 font-bold uppercase tracking-wider mb-1">{t.connectionLocal}</span>
@@ -1437,7 +1503,14 @@ export default function AuditWizard() {
             </div>
             
             <div className="flex items-center gap-3">
-              {/* Language Selector Toggle Removed */}
+              {/* Language Selector Toggle */}
+              <button
+                onClick={handleToggleLang}
+                className="text-[10px] font-mono font-bold tracking-widest text-violet-400 hover:text-white bg-violet-500/10 hover:bg-violet-500/25 px-2.5 py-1.5 rounded-lg border border-violet-500/25 transition-all cursor-pointer shrink-0"
+                title="Switch Language / Cambiar Idioma"
+              >
+                {lang === "es" ? "EN" : "ES"}
+              </button>
 
               <button
                 onClick={() => {
@@ -2264,17 +2337,14 @@ export default function AuditWizard() {
                               disabled={auditLoading}
                               className="w-full bg-slate-955 border border-white/10 hover:border-gold-custom/30 text-gray-200 text-xs rounded-lg pl-3 pr-8 py-2.5 outline-none focus:outline-none focus:border-gold-custom focus:ring-1 focus:ring-gold-custom transition-all cursor-pointer appearance-none font-mono"
                             >
-                              <option value="gemini" className="bg-[#0b0f19] text-gray-200">
-                                Google Gemini ({lang === "es" ? "Por defecto" : "Default"})
+                              <option value="mock" className="bg-[#0b0f19] text-gray-200">
+                                {lang === "es" ? "Plantilla Local (Simulado) [Por defecto]" : "Local Template (Mock) [Default]"}
                               </option>
                               <option value="openai" className="bg-[#0b0f19] text-gray-200">
                                 OpenAI (GPT-4o)
                               </option>
                               <option value="perplexity" className="bg-[#0b0f19] text-gray-200">
                                 Perplexity (Sonar)
-                              </option>
-                              <option value="mock" className="bg-[#0b0f19] text-gray-200">
-                                {lang === "es" ? "Plantilla Local (Simulado)" : "Local Template (Mock)"}
                               </option>
                             </select>
                             <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-gray-400">
@@ -2350,7 +2420,7 @@ export default function AuditWizard() {
                             </div>
                             <button
                               type="button"
-                              onClick={() => setGenerationEngine("gemini")}
+                              onClick={() => setGenerationEngine("openai")}
                               className="text-[9px] font-bold text-gold-custom hover:underline block cursor-pointer transition-all"
                             >
                               {lang === "es" ? "→ Cambiar a Generación con API Real" : "→ Switch to Real API Generation"}
@@ -4200,9 +4270,9 @@ export default function AuditWizard() {
                             : "Key buyer intents where your brand is missing but your competitors are cited."}
                         </p>
 
-                        {reportData.metrics.opportunityAnalysis.length > 0 ? (
+                        {activeReportData?.metrics.opportunityAnalysis.length > 0 ? (
                           <div className="space-y-3.5">
-                            {reportData.metrics.opportunityAnalysis.map((opp: any, idx: number) => (
+                            {activeReportData?.metrics.opportunityAnalysis.map((opp: any, idx: number) => (
                               <div key={idx} className="p-4 border border-red-500/10 bg-red-500/[0.02] hover:border-red-500/20 rounded-xl space-y-3 transition-all">
                                 <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2 border-b border-white/5 pb-2">
                                   <span className="text-sm font-extrabold text-white">
@@ -4276,7 +4346,7 @@ export default function AuditWizard() {
                                 {lang === "es" ? "Prioridad Alta - Mejoras Directas de Visibilidad" : "High Priority - Direct Visibility Uplift"}
                               </span>
                               <span className="text-xs font-bold uppercase px-1.5 py-0.5 rounded border border-red-500/20 bg-red-500/10 text-red-300 font-mono">
-                                {reportData.metrics.actionPlan.filter((a: any) => a.priority === "High").length} {lang === "es" ? "Recomendaciones" : "Recommendations"}
+                                {activeReportData?.metrics.actionPlan.filter((a: any) => a.priority === "High").length} {lang === "es" ? "Recomendaciones" : "Recommendations"}
                               </span>
                             </div>
                             {openPriorities.High ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
@@ -4284,7 +4354,7 @@ export default function AuditWizard() {
                           
                           {openPriorities.High && (
                             <div className="p-5 space-y-3 bg-slate-950/[0.05]">
-                              {reportData.metrics.actionPlan.filter((a: any) => a.priority === "High").map((act: any, idx: number) => (
+                              {activeReportData?.metrics.actionPlan.filter((a: any) => a.priority === "High").map((act: any, idx: number) => (
                                 <div key={idx} className="flex gap-3 p-3 border border-red-500/10 bg-red-500/[0.01] rounded-xl hover:border-red-500/20 transition-all text-sm">
                                   <div className="p-1 rounded bg-red-500/10 text-red-400 h-fit">
                                     <Zap className="w-3.5 h-3.5" />
@@ -4311,7 +4381,7 @@ export default function AuditWizard() {
                                 {lang === "es" ? "Prioridad Media - Construcción de Autoridad" : "Medium Priority - Authority Building"}
                               </span>
                               <span className="text-xs font-bold uppercase px-1.5 py-0.5 rounded border border-orange-500/20 bg-orange-500/10 text-orange-300 font-mono">
-                                {reportData.metrics.actionPlan.filter((a: any) => a.priority === "Medium").length} {lang === "es" ? "Recomendaciones" : "Recommendations"}
+                                {activeReportData?.metrics.actionPlan.filter((a: any) => a.priority === "Medium").length} {lang === "es" ? "Recomendaciones" : "Recommendations"}
                               </span>
                             </div>
                             {openPriorities.Medium ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
@@ -4319,7 +4389,7 @@ export default function AuditWizard() {
                           
                           {openPriorities.Medium && (
                             <div className="p-5 space-y-3 bg-slate-955/[0.05]">
-                              {reportData.metrics.actionPlan.filter((a: any) => a.priority === "Medium").map((act: any, idx: number) => (
+                              {activeReportData?.metrics.actionPlan.filter((a: any) => a.priority === "Medium").map((act: any, idx: number) => (
                                 <div key={idx} className="flex gap-3 p-3 border border-orange-500/10 bg-orange-500/[0.01] rounded-xl hover:border-orange-500/20 transition-all text-sm">
                                   <div className="p-1 rounded bg-orange-500/10 text-orange-400 h-fit">
                                     <Layers className="w-3.5 h-3.5" />
@@ -4346,7 +4416,7 @@ export default function AuditWizard() {
                                 {lang === "es" ? "Prioridad Baja - Optimización Técnica" : "Low Priority - Technical Optimization"}
                               </span>
                               <span className="text-xs font-bold uppercase px-1.5 py-0.5 rounded border border-blue-500/20 bg-blue-500/10 text-blue-300 font-mono">
-                                {reportData.metrics.actionPlan.filter((a: any) => a.priority === "Low").length} {lang === "es" ? "Recomendaciones" : "Recommendations"}
+                                {activeReportData?.metrics.actionPlan.filter((a: any) => a.priority === "Low").length} {lang === "es" ? "Recomendaciones" : "Recommendations"}
                               </span>
                             </div>
                             {openPriorities.Low ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
@@ -4354,7 +4424,7 @@ export default function AuditWizard() {
                           
                           {openPriorities.Low && (
                             <div className="p-5 space-y-3 bg-slate-955/[0.05]">
-                              {reportData.metrics.actionPlan.filter((a: any) => a.priority === "Low").map((act: any, idx: number) => (
+                              {activeReportData?.metrics.actionPlan.filter((a: any) => a.priority === "Low").map((act: any, idx: number) => (
                                 <div key={idx} className="flex gap-3 p-3 border border-blue-500/10 bg-blue-500/[0.01] rounded-xl hover:border-blue-500/20 transition-all text-sm">
                                   <div className="p-1 rounded bg-blue-500/10 text-blue-400 h-fit">
                                     <SettingsIcon className="w-3.5 h-3.5" />
@@ -4393,7 +4463,7 @@ export default function AuditWizard() {
                             onChange={(e) => setComparisonQuestionIdx(Number(e.target.value))}
                             className="px-3.5 py-2 bg-slate-955 border border-white/10 rounded-lg text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-gold-custom font-mono cursor-pointer max-w-full sm:max-w-xs"
                           >
-                            {reportData.metrics.questionsDetail.map((q: any, idx: number) => (
+                            {Array.from(new Map(reportData.metrics.questionsDetail.map((q: any) => [q.questionText, q])).values()).map((q: any, idx: number) => (
                               <option key={idx} value={idx}>
                                 {idx + 1}. {q.questionText}
                               </option>
@@ -4408,7 +4478,7 @@ export default function AuditWizard() {
                           const qText = reportData.metrics.questionsDetail[comparisonQuestionIdx]?.questionText || "";
                           const qDefault = reportData.metrics.questionsDetail[comparisonQuestionIdx]?.answer || "";
                           const engineData = getEngineSimulatedData(eng, qText, qDefault);
-                          const isActualRunEngine = reportData?.run?.provider?.toLowerCase().includes(eng);
+                          const isActualRunEngine = uniqueProviders.map((p: string) => p.toLowerCase()).includes(eng);
                           
                           return (
                             <div 

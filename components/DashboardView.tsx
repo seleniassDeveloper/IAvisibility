@@ -61,7 +61,7 @@ interface DashboardViewProps {
 export default function DashboardView({ project, run, metrics, recommendations }: DashboardViewProps) {
   const [mounted, setMounted] = useState(false);
   const [openQuestionId, setOpenQuestionId] = useState<string | null>(null);
-  const [lang, setLang] = useState<"es" | "en">("en");
+  const [lang, setLang] = useState<"es" | "en">("es");
   const [activeModal, setActiveModal] = useState<string | null>(null);
   
   const [selectedEngine, setSelectedEngine] = useState<string>("all");
@@ -96,17 +96,23 @@ export default function DashboardView({ project, run, metrics, recommendations }
       );
 
   const activeRecommendations = selectedEngine === "all"
-    ? recommendations
+    ? generateRecommendations(metrics, project.company_name, lang)
     : generateRecommendations(activeMetrics, project.company_name, lang);
 
   // SSR hydration guard
   useEffect(() => {
     setMounted(true);
     if (typeof window !== "undefined") {
-      localStorage.removeItem("preferred_lang");
-      setLang("en");
+      const storedLang = (localStorage.getItem("preferred_lang") as "es" | "en") || "es";
+      setLang(storedLang);
     }
   }, []);
+
+  const handleToggleLang = () => {
+    const nextLang = lang === "es" ? "en" : "es";
+    setLang(nextLang);
+    localStorage.setItem("preferred_lang", nextLang);
+  };
 
   const t = translations[lang];
 
@@ -179,7 +185,14 @@ export default function DashboardView({ project, run, metrics, recommendations }
 
         {/* Action Buttons */}
         <div className="flex items-center gap-3 shrink-0">
-          {/* Language Selector Toggle Removed */}
+          {/* Language Selector Toggle */}
+          <button
+            onClick={handleToggleLang}
+            className="text-[10px] font-mono font-bold tracking-widest text-violet-400 hover:text-white bg-violet-500/10 hover:bg-violet-500/25 px-2.5 py-1.5 rounded-lg border border-violet-500/25 transition-all cursor-pointer shrink-0"
+            title="Switch Language / Cambiar Idioma"
+          >
+            {lang === "es" ? "EN" : "ES"}
+          </button>
 
           <Link
             href={`/project/${project.id}`}

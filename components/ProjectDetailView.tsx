@@ -36,14 +36,14 @@ interface ProjectDetailViewProps {
 }
 
 export default function ProjectDetailView({ project, initialQuestions, runs }: ProjectDetailViewProps) {
-  const [lang, setLang] = useState<"es" | "en">("en");
+  const [lang, setLang] = useState<"es" | "en">("es");
   const [mounted, setMounted] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
     setMounted(true);
     if (typeof window !== "undefined") {
-      setLang((localStorage.getItem("preferred_lang") as "es" | "en") || "en");
+      setLang((localStorage.getItem("preferred_lang") as "es" | "en") || "es");
     }
   }, []);
 

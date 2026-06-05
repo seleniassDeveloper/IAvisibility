@@ -12,7 +12,9 @@ export class GeminiSearchProvider implements CitationProvider {
         throw new Error("Gemini API key is missing");
       }
 
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${this.apiKey}`, {
+      // Delay to avoid free tier rate limiting (15 RPM)
+
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${this.apiKey}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -25,7 +27,7 @@ export class GeminiSearchProvider implements CitationProvider {
           ],
           tools: [
             {
-              googleSearchRetrieval: {}
+              google_search: {}
             }
           ]
         }),
@@ -44,9 +46,14 @@ export class GeminiSearchProvider implements CitationProvider {
       const sources = chunks
         .map((c: any) => {
           if (c.web) {
+            // Gemini 2.5 returns redirect URIs - use title as actual domain URL
+            const title = c.web.title || "";
+            const actualUrl = title && !title.includes(" ")
+              ? `https://${title}`
+              : c.web.uri;
             return {
-              url: c.web.uri,
-              title: c.web.title || c.web.uri,
+              url: actualUrl,
+              title: title || c.web.uri,
             };
           }
           return null;
@@ -60,6 +67,7 @@ export class GeminiSearchProvider implements CitationProvider {
         raw: data,
       };
     } catch (err) {
+      console.error("Gemini provider error:", String(err));
       return {
         answer: "",
         citations: [],

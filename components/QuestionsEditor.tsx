@@ -32,13 +32,13 @@ export default function QuestionsEditor({ projectId, initialQuestions, lang: pro
   const [auditLogs, setAuditLogs] = useState<string[]>([]);
   const [progress, setProgress] = useState(0);
 
-  const [lang, setLang] = useState<"es" | "en">("en");
+  const [lang, setLang] = useState<"es" | "en">("es");
 
   useEffect(() => {
     if (propLang) {
       setLang(propLang);
     } else if (typeof window !== "undefined") {
-      setLang((localStorage.getItem("preferred_lang") as "es" | "en") || "en");
+      setLang((localStorage.getItem("preferred_lang") as "es" | "en") || "es");
     }
   }, [propLang]);
 

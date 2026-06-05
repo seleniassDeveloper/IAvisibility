@@ -531,15 +531,19 @@ export async function getAuditRunDetails(runId: string): Promise<AuditRunDetails
     return { run, responses };
   } else {
     const db = getSqliteDb();
-    const run = db.prepare("SELECT * FROM audit_runs WHERE id = ?").get(runId);
+    const runIds = runId.split(",").map((id: string) => id.trim()).filter(Boolean);
+    const firstRunId = runIds[0];
+    const run = db.prepare("SELECT * FROM audit_runs WHERE id = ?").get(firstRunId);
     if (!run) return null;
 
+    const placeholders = runIds.map(() => "?").join(", ");
     const responses = db.prepare(`
-      SELECT r.id, r.question_id, q.text as question_text, r.answer
+      SELECT r.id, r.question_id, q.text as question_text, r.answer, ar.provider as provider
       FROM responses r
       JOIN questions q ON r.question_id = q.id
-      WHERE r.run_id = ?
-    `).all(runId) as any[];
+      JOIN audit_runs ar ON r.run_id = ar.id
+      WHERE r.run_id IN (${placeholders})
+    `).all(...runIds) as any[];
 
     for (const resp of responses) {
       const cits = db.prepare(`
@@ -574,7 +578,7 @@ function groupRuns(runs: any[]): any[] {
     const matchGroupIdx = grouped.findIndex(g => {
       if (g.project_id !== run.project_id) return false;
       const gTime = new Date(g.created_at).getTime();
-      return Math.abs(gTime - runTime) <= 2 * 60 * 1000; // 2 minutes
+      return Math.abs(gTime - runTime) <= 5 * 60 * 1000; // 5 minutes
     });
     
     if (matchGroupIdx !== -1) {
